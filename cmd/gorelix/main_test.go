@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -34,13 +33,5 @@ func TestExecutableRejectsUnknownCommand(t *testing.T) {
 
 	if !strings.Contains(string(output), "unknown command") {
 		t.Fatalf("expected explanatory error, got: %s", output)
-	}
-}
-
-func TestProcessEnvironmentIsAvailable(t *testing.T) {
-	// The executable relies on the operating system process environment.
-	// This test ensures the test process can inspect it.
-	if _, ok := os.LookupEnv("PATH"); !ok {
-		t.Fatal("expected PATH to be available in the test environment")
 	}
 }

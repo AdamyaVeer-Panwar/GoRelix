@@ -15,3 +15,5 @@ Thumbs.db
 *.db
 *.wal
 *.tmp
+# Editor local history
+.history/
