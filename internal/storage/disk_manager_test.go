@@ -172,6 +172,7 @@ func TestWritePageUpdatesExistingPage(t *testing.T) {
 func TestRejectsOutOfRangePageIDs(t *testing.T) {
 	dm := openTestDiskManager(t)
 
+	// An empty database must reject reads and writes to page 0.
 	_, err := dm.ReadPage(0)
 	if !errors.Is(err, ErrPageOutOfRange) {
 		t.Fatalf("expected ErrPageOutOfRange, got %v", err)
@@ -181,8 +182,51 @@ func TestRejectsOutOfRangePageIDs(t *testing.T) {
 	if !errors.Is(err, ErrPageOutOfRange) {
 		t.Fatalf("expected ErrPageOutOfRange, got %v", err)
 	}
-}
 
+	// Rejected writes must not extend the database file.
+	count, err := dm.PageCount()
+	if err != nil {
+		t.Fatalf("PageCount failed: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 pages after rejected write, got %d", count)
+	}
+
+	// Create one page and preserve its contents.
+	var original Page
+	for i := range original {
+		original[i] = 0xAA
+	}
+
+	id, err := dm.AppendPage(original)
+	if err != nil {
+		t.Fatalf("AppendPage failed: %v", err)
+	}
+
+	// Attempt to write to the next, nonexistent page.
+	err = dm.WritePage(id+1, Page{})
+	if !errors.Is(err, ErrPageOutOfRange) {
+		t.Fatalf("expected ErrPageOutOfRange, got %v", err)
+	}
+
+	// The rejected write must not append a page.
+	count, err = dm.PageCount()
+	if err != nil {
+		t.Fatalf("PageCount failed: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 page after rejected write, got %d", count)
+	}
+
+	// The existing page must remain unchanged.
+	actual, err := dm.ReadPage(id)
+	if err != nil {
+		t.Fatalf("ReadPage failed: %v", err)
+	}
+	if actual != original {
+		t.Fatal("existing page changed after rejected write")
+	}
+}
 func TestRejectsPartialPageFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.db")
 
