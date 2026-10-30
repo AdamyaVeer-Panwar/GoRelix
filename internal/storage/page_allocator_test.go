@@ -148,3 +148,104 @@ func TestAllocatePageRejectsFailedDatabase(t *testing.T) {
 		)
 	}
 }
+
+func TestAllocatePageAtCapacityBoundary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "boundary.db")
+
+	dm, err := OpenDiskManager(path)
+	if err != nil {
+		t.Fatalf("OpenDiskManager() error = %v", err)
+	}
+	defer dm.Close()
+
+	// Simulate a database with all but one data page allocated.
+	metadata := NewMetadata()
+	for i := range metadata.Bitmap {
+		metadata.Bitmap[i] = 0xFF
+	}
+
+	// Clear the final allocation bit.
+	lastByte := len(metadata.Bitmap) - 1
+	metadata.Bitmap[lastByte] &^= 1 << 7
+	metadata.AllocatedCount = metadata.BitmapCapacity - 1
+
+	// Create the logical physical size:
+	// metadata page + all currently allocated data pages.
+	physicalPageCount := uint64(metadata.AllocatedCount) + 1
+	fileSize := int64(physicalPageCount) * int64(PageSize)
+
+	if err := dm.file.Truncate(fileSize); err != nil {
+		t.Fatalf("Truncate() error = %v", err)
+	}
+
+	metadataPage, err := EncodeMetadata(metadata)
+	if err != nil {
+		t.Fatalf("EncodeMetadata() error = %v", err)
+	}
+
+	if err := dm.WritePage(MetadataPageID, metadataPage); err != nil {
+		t.Fatalf("WritePage() error = %v", err)
+	}
+
+	if err := dm.Sync(); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	db := &Database{
+		disk:     dm,
+		metadata: metadata,
+	}
+
+	// Allocate the final available data page.
+	id, err := db.AllocatePage()
+	if err != nil {
+		t.Fatalf("final AllocatePage() error = %v", err)
+	}
+
+	if uint64(id) != MaxDatabasePages-1 {
+		t.Fatalf("final page ID = %d, want %d", id, MaxDatabasePages-1)
+	}
+
+	// Capture state after the final successful allocation.
+	beforeMetadata := db.Metadata()
+	beforePageCount, err := dm.PageCount()
+	if err != nil {
+		t.Fatalf("PageCount() error = %v", err)
+	}
+
+	// One more allocation must fail.
+	_, err = db.AllocatePage()
+	if !errors.Is(err, ErrDatabaseCapacityExceeded) {
+		t.Fatalf(
+			"AllocatePage() error = %v, want ErrDatabaseCapacityExceeded",
+			err,
+		)
+	}
+
+	// Verify that the failed allocation changed nothing.
+	afterMetadata := db.Metadata()
+	afterPageCount, err := dm.PageCount()
+	if err != nil {
+		t.Fatalf("PageCount() after rejection error = %v", err)
+	}
+
+	if afterMetadata.AllocatedCount != beforeMetadata.AllocatedCount {
+		t.Fatalf(
+			"AllocatedCount changed: got %d, want %d",
+			afterMetadata.AllocatedCount,
+			beforeMetadata.AllocatedCount,
+		)
+	}
+
+	if afterPageCount != beforePageCount {
+		t.Fatalf(
+			"physical page count changed: got %d, want %d",
+			afterPageCount,
+			beforePageCount,
+		)
+	}
+
+	if string(afterMetadata.Bitmap) != string(beforeMetadata.Bitmap) {
+		t.Fatal("allocation bitmap changed after rejected allocation")
+	}
+}
