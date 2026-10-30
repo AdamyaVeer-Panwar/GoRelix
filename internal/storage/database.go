@@ -110,7 +110,7 @@ func OpenDatabase(path string) (*Database, error) {
 		))
 	}
 
-	// Every physical data page must be marked allocated.
+	// Every physical data page must be marked allocated and valid.
 	for physicalID := uint64(1); physicalID < pageCount; physicalID++ {
 		bitmapIndex := physicalID - 1
 		byteIndex := bitmapIndex / 8
@@ -121,6 +121,34 @@ func OpenDatabase(path string) (*Database, error) {
 				"%w: physical page %d is not marked allocated",
 				ErrInvalidDatabaseLayout,
 				physicalID,
+			))
+		}
+
+		dataPage, err := disk.ReadPage(PageID(physicalID))
+		if err != nil {
+			return fail(fmt.Errorf(
+				"read data page %d: %w",
+				physicalID,
+				err,
+			))
+		}
+
+		header, err := DecodePageHeader(dataPage, PageID(physicalID))
+		if err != nil {
+			return fail(fmt.Errorf(
+				"validate data page %d: %w",
+				physicalID,
+				err,
+			))
+		}
+
+		if header.Type != PageTypeData {
+			return fail(fmt.Errorf(
+				"%w: physical page %d has page type %d, want %d",
+				ErrInvalidDatabaseLayout,
+				physicalID,
+				header.Type,
+				PageTypeData,
 			))
 		}
 	}

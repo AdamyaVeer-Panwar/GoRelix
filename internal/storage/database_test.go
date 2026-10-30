@@ -142,3 +142,117 @@ func TestOpenDatabaseRejectsInvalidFileSize(t *testing.T) {
 		t.Fatalf("file size = %d, want 3; file may have been modified", len(contents))
 	}
 }
+func TestOpenDatabaseRejectsCorruptedDataPage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "corrupted-page.db")
+
+	db, err := OpenDatabase(path)
+	if err != nil {
+		t.Fatalf("OpenDatabase() error = %v", err)
+	}
+
+	_, err = db.AllocatePage()
+	if err != nil {
+		db.Close()
+		t.Fatalf("AllocatePage() error = %v", err)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	// Corrupt a byte in the allocated data page.
+	disk, err := OpenDiskManager(path)
+	if err != nil {
+		t.Fatalf("OpenDiskManager() error = %v", err)
+	}
+
+	page, err := disk.ReadPage(PageID(1))
+	if err != nil {
+		disk.Close()
+		t.Fatalf("ReadPage() error = %v", err)
+	}
+
+	page[PageHeaderSize] ^= 0xFF
+
+	if err := disk.WritePage(PageID(1), page); err != nil {
+		disk.Close()
+		t.Fatalf("WritePage() error = %v", err)
+	}
+
+	if err := disk.Sync(); err != nil {
+		disk.Close()
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	if err := disk.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := OpenDatabase(path)
+	if err == nil {
+		reopened.Close()
+		t.Fatal("OpenDatabase() succeeded with a corrupted data-page checksum")
+	}
+
+	if !errors.Is(err, ErrPageChecksum) {
+		t.Fatalf("error = %v, want ErrPageChecksum", err)
+	}
+}
+
+func TestOpenDatabaseRejectsWrongDataPageType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wrong-page-type.db")
+
+	db, err := OpenDatabase(path)
+	if err != nil {
+		t.Fatalf("OpenDatabase() error = %v", err)
+	}
+
+	_, err = db.AllocatePage()
+	if err != nil {
+		db.Close()
+		t.Fatalf("AllocatePage() error = %v", err)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	disk, err := OpenDiskManager(path)
+	if err != nil {
+		t.Fatalf("OpenDiskManager() error = %v", err)
+	}
+
+	page, err := disk.ReadPage(PageID(1))
+	if err != nil {
+		disk.Close()
+		t.Fatalf("ReadPage() error = %v", err)
+	}
+
+	// Change the page type to metadata, then refresh the checksum.
+	page[PageTypeOffset] = byte(PageTypeMetadata)
+	RefreshPageChecksum(&page)
+
+	if err := disk.WritePage(PageID(1), page); err != nil {
+		disk.Close()
+		t.Fatalf("WritePage() error = %v", err)
+	}
+
+	if err := disk.Sync(); err != nil {
+		disk.Close()
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	if err := disk.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := OpenDatabase(path)
+	if err == nil {
+		reopened.Close()
+		t.Fatal("OpenDatabase() succeeded with an invalid data-page type")
+	}
+
+	if !errors.Is(err, ErrInvalidDatabaseLayout) {
+		t.Fatalf("error = %v, want ErrInvalidDatabaseLayout", err)
+	}
+}
